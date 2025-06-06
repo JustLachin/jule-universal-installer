@@ -1,5 +1,5 @@
 # Jule Windows Export Tool (`export-win.py`)
-
+## DOWNLOAD .EXE 👇 https://github.com/JustLachin/jule-universal-installer/releases/download/jule-universal-installer/Jule-Universal-installer.exe
 This script is designed to package the Jule installer (`main.py`) into a single executable file for Windows.
 
 ## What it does:
