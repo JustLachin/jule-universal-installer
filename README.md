@@ -18,7 +18,7 @@ This script is designed to package the Jule installer (`main.py`) into a single 
     *   If any of these files are missing, the script will report an error and stop.
 
 3.  **Packages the Application**:
-    *   Using `PyInstaller`, the script bundles `main.py` and all its dependencies, along with the specified data files (like `logo.png`, `uninstall.py`, `logo.ico`), into a single `.exe` file.
+    *   Using `PyInstaller`, the script bundles `main.py` and all its dependencies, along with the specified data files (like `logo.png`, `logo.ico`), into a single `.exe` file.
     *   The output executable will be named `Jule.exe`.
     *   The process includes:
         *   Setting the application icon (`logo.ico`).
@@ -34,7 +34,7 @@ This script is designed to package the Jule installer (`main.py`) into a single 
 1.  **Ensure Prerequisites**:
     *   Make sure you have Python installed on your Windows system.
     *   Ensure `pip` (Python package installer) is available and in your system's PATH.
-    *   Place the `export-win.py` script in the root directory of your Jule installer project, alongside `main.py`, `requirements.txt`, `logo.ico`, `logo.png`, `uninstall.py`, and `version.txt`.
+    *   Place the `export-win.py` script in the root directory of your Jule installer project, alongside `main.py`, `requirements.txt`, `logo.ico`, `logo.png`, and `version.txt`.
 
 2.  **Run the Script**:
     *   Open a command prompt or terminal in the directory where `export-win.py` is located.
