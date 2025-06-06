@@ -14,7 +14,6 @@ This script is designed to package the Jule installer (`main.py`) into a single 
         *   `main.py`: The main installer script.
         *   `logo.ico`: The application icon.
         *   `logo.png`: The application logo.
-        *   `uninstall.py`: The uninstaller script (though it's added as data, not built as a separate uninstaller in the current `export_windows` function).
         *   `version.txt`: File containing version information.
     *   If any of these files are missing, the script will report an error and stop.
 
