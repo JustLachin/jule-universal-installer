@@ -1,0 +1,565 @@
+import sys
+import os
+import subprocess
+from PyQt5.QtWidgets import (QApplication, QMainWindow, QTextEdit, QVBoxLayout, QHBoxLayout, 
+                           QWidget, QAction, QFileDialog, QMessageBox, QSplitter, 
+                           QTreeView, QLabel, QDockWidget, QTabWidget, QShortcut,
+                           QFileSystemModel)
+from PyQt5.QtGui import QFont, QIcon, QSyntaxHighlighter, QTextCharFormat, QColor, QKeySequence
+from PyQt5.QtCore import Qt, QProcess, QRegExp, QDir
+
+class JuleSyntaxHighlighter(QSyntaxHighlighter):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.highlighting_rules = []
+        
+        # Keywords
+        keyword_format = QTextCharFormat()
+        keyword_format.setForeground(QColor("#0000FF"))
+        keyword_format.setFontWeight(QFont.Bold)
+        keywords = [
+            "fn", "return", "if", "else", "for", "in", "while", "break", "continue",
+            "struct", "impl", "trait", "enum", "const", "let", "mut", "type", "use",
+            "pub", "unsafe", "extern", "match", "self", "super", "static", "co", "go"
+        ]
+        for word in keywords:
+            pattern = QRegExp(f"\\b{word}\\b")
+            rule = (pattern, keyword_format)
+            self.highlighting_rules.append(rule)
+        
+        # Types
+        type_format = QTextCharFormat()
+        type_format.setForeground(QColor("#008000"))
+        types = ["int", "uint", "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", 
+                "f32", "f64", "bool", "str", "char", "byte", "void"]
+        for word in types:
+            pattern = QRegExp(f"\\b{word}\\b")
+            rule = (pattern, type_format)
+            self.highlighting_rules.append(rule)
+        
+        # Single-line comments
+        comment_format = QTextCharFormat()
+        comment_format.setForeground(QColor("#808080"))
+        pattern = QRegExp("//[^\n]*")
+        rule = (pattern, comment_format)
+        self.highlighting_rules.append(rule)
+        
+        # Multi-line comments
+        self.multi_line_comment_format = QTextCharFormat()
+        self.multi_line_comment_format.setForeground(QColor("#808080"))
+        self.comment_start_expression = QRegExp("/\\*")
+        self.comment_end_expression = QRegExp("\\*/")
+        
+        # Strings
+        string_format = QTextCharFormat()
+        string_format.setForeground(QColor("#800000"))
+        pattern = QRegExp('".*"')
+        pattern.setMinimal(True)
+        rule = (pattern, string_format)
+        self.highlighting_rules.append(rule)
+        
+        # Numbers
+        number_format = QTextCharFormat()
+        number_format.setForeground(QColor("#800080"))
+        pattern = QRegExp("\\b[0-9]+\\b")
+        rule = (pattern, number_format)
+        self.highlighting_rules.append(rule)
+    
+    def highlightBlock(self, text):
+        # Apply regular rules
+        for pattern, format in self.highlighting_rules:
+            expression = QRegExp(pattern)
+            index = expression.indexIn(text)
+            while index >= 0:
+                length = expression.matchedLength()
+                self.setFormat(index, length, format)
+                index = expression.indexIn(text, index + length)
+        
+        # Handle multi-line comments
+        self.setCurrentBlockState(0)
+        start_index = 0
+        if self.previousBlockState() != 1:
+            start_index = self.comment_start_expression.indexIn(text)
+        
+        while start_index >= 0:
+            end_index = self.comment_end_expression.indexIn(text, start_index)
+            if end_index == -1:
+                self.setCurrentBlockState(1)
+                comment_length = len(text) - start_index
+            else:
+                comment_length = end_index - start_index + self.comment_end_expression.matchedLength()
+            
+            self.setFormat(start_index, comment_length, self.multi_line_comment_format)
+            start_index = self.comment_start_expression.indexIn(text, start_index + comment_length)
+
+def main():
+    app = QApplication(sys.argv)
+    window = JuleIDE()
+    window.show()
+    sys.exit(app.exec_())
+
+class JuleIDE(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("IDLE Jule")
+        self.setGeometry(100, 100, 1000, 700)
+        
+        # Set icon if available
+        icon_path = os.path.join(os.path.dirname(sys.executable), "logo.png")
+        if os.path.exists(icon_path):
+            self.setWindowIcon(QIcon(icon_path))
+        
+        # Create central widget
+        self.central_widget = QWidget()
+        self.setCentralWidget(self.central_widget)
+        main_layout = QVBoxLayout(self.central_widget)
+        
+        # Create splitter for editor and output
+        self.splitter = QSplitter(Qt.Vertical)
+        main_layout.addWidget(self.splitter)
+        
+        # Create tab widget for editors
+        self.tab_widget = QTabWidget()
+        self.tab_widget.setTabsClosable(True)
+        self.tab_widget.tabCloseRequested.connect(self.close_tab)
+        self.splitter.addWidget(self.tab_widget)
+        
+        # Create output console
+        self.output_console = QTextEdit()
+        self.output_console.setReadOnly(True)
+        self.output_console.setFont(QFont("Consolas", 10))
+        self.splitter.addWidget(self.output_console)
+        
+        # Set splitter sizes
+        self.splitter.setSizes([600, 200])
+        
+        # Create file explorer dock widget
+        self.create_file_explorer()
+        
+        # Setup menu and toolbar
+        self.setup_menu()
+        self.setup_toolbar()
+        
+        # Find Jule executable
+        self.find_jule_executable()
+        if not self.jule_exe:
+            QMessageBox.warning(self, "Error", "Could not find Jule executable. Please make sure Jule is installed correctly.")
+        
+        # Set up shortcuts
+        self.setup_shortcuts()
+        
+        # Welcome message
+        self.output_console.append("Welcome to IDLE Jule!")
+        self.output_console.append("Create or open a Jule file to get started.")
+    
+    def setup_shortcuts(self):
+        # Save shortcut
+        save_shortcut = QShortcut(QKeySequence("Ctrl+S"), self)
+        save_shortcut.activated.connect(self.save_file)
+        
+        # Run shortcut
+        run_shortcut = QShortcut(QKeySequence("F5"), self)
+        run_shortcut.activated.connect(self.run_script)
+        
+        # New file shortcut
+        new_shortcut = QShortcut(QKeySequence("Ctrl+N"), self)
+        new_shortcut.activated.connect(self.new_file)
+        
+        # Open file shortcut
+        open_shortcut = QShortcut(QKeySequence("Ctrl+O"), self)
+        open_shortcut.activated.connect(self.open_file)
+    
+    def create_file_explorer(self):
+        # Create dock widget
+        dock = QDockWidget("File Explorer", self)
+        dock.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
+        
+        # Create file system model
+        self.file_model = QFileSystemModel()
+        self.file_model.setRootPath(QDir.currentPath())
+        self.file_model.setNameFilters(["*.jule"])
+        self.file_model.setNameFilterDisables(False)
+        
+        # Create tree view
+        self.file_tree = QTreeView()
+        self.file_tree.setModel(self.file_model)
+        self.file_tree.setRootIndex(self.file_model.index(QDir.currentPath()))
+        self.file_tree.setAnimated(True)
+        self.file_tree.setIndentation(20)
+        self.file_tree.setSortingEnabled(True)
+        self.file_tree.setColumnWidth(0, 250)
+        self.file_tree.hideColumn(1)  # Size column
+        self.file_tree.hideColumn(2)  # Type column
+        self.file_tree.hideColumn(3)  # Date modified column
+        
+        # Connect double-click to open file
+        self.file_tree.doubleClicked.connect(self.tree_item_double_clicked)
+        
+        # Set the dock widget's content
+        dock.setWidget(self.file_tree)
+        
+        # Add dock to main window
+        self.addDockWidget(Qt.LeftDockWidgetArea, dock)
+    
+    def tree_item_double_clicked(self, index):
+        path = self.file_model.filePath(index)
+        if os.path.isfile(path) and path.endswith(".jule"):
+            self.open_specific_file(path)
+    
+    def setup_menu(self):
+        # Create menu bar
+        menu_bar = self.menuBar()
+        
+        # File menu
+        file_menu = menu_bar.addMenu("File")
+        
+        # New action
+        new_action = QAction("New", self)
+        new_action.setShortcut("Ctrl+N")
+        new_action.triggered.connect(self.new_file)
+        file_menu.addAction(new_action)
+        
+        # Open action
+        open_action = QAction("Open", self)
+        open_action.setShortcut("Ctrl+O")
+        open_action.triggered.connect(self.open_file)
+        file_menu.addAction(open_action)
+        
+        # Save action
+        save_action = QAction("Save", self)
+        save_action.setShortcut("Ctrl+S")
+        save_action.triggered.connect(self.save_file)
+        file_menu.addAction(save_action)
+        
+        # Save As action
+        save_as_action = QAction("Save As", self)
+        save_as_action.setShortcut("Ctrl+Shift+S")
+        save_as_action.triggered.connect(self.save_file_as)
+        file_menu.addAction(save_as_action)
+        
+        file_menu.addSeparator()
+        
+        # Exit action
+        exit_action = QAction("Exit", self)
+        exit_action.setShortcut("Ctrl+Q")
+        exit_action.triggered.connect(self.close)
+        file_menu.addAction(exit_action)
+        
+        # Edit menu
+        edit_menu = menu_bar.addMenu("Edit")
+        
+        # Cut action
+        cut_action = QAction("Cut", self)
+        cut_action.setShortcut("Ctrl+X")
+        cut_action.triggered.connect(self.cut)
+        edit_menu.addAction(cut_action)
+        
+        # Copy action
+        copy_action = QAction("Copy", self)
+        copy_action.setShortcut("Ctrl+C")
+        copy_action.triggered.connect(self.copy)
+        edit_menu.addAction(copy_action)
+        
+        # Paste action
+        paste_action = QAction("Paste", self)
+        paste_action.setShortcut("Ctrl+V")
+        paste_action.triggered.connect(self.paste)
+        edit_menu.addAction(paste_action)
+        
+        # Run menu
+        run_menu = menu_bar.addMenu("Run")
+        
+        # Run action
+        run_action = QAction("Run Script", self)
+        run_action.setShortcut("F5")
+        run_action.triggered.connect(self.run_script)
+        run_menu.addAction(run_action)
+    
+    def setup_toolbar(self):
+        # Create toolbar
+        toolbar = self.addToolBar("Main Toolbar")
+        toolbar.setMovable(False)
+        
+        # New file action
+        new_action = QAction("New", self)
+        new_action.triggered.connect(self.new_file)
+        toolbar.addAction(new_action)
+        
+        # Open file action
+        open_action = QAction("Open", self)
+        open_action.triggered.connect(self.open_file)
+        toolbar.addAction(open_action)
+        
+        # Save file action
+        save_action = QAction("Save", self)
+        save_action.triggered.connect(self.save_file)
+        toolbar.addAction(save_action)
+        
+        toolbar.addSeparator()
+        
+        # Run script action
+    
+    # Create tree view
+    self.file_tree = QTreeView()
+    self.file_tree.setModel(self.file_model)
+    self.file_tree.setRootIndex(self.file_model.index(QDir.currentPath()))
+    self.file_tree.setAnimated(True)
+    self.file_tree.setIndentation(20)
+    self.file_tree.setSortingEnabled(True)
+    self.file_tree.setColumnWidth(0, 250)
+    self.file_tree.hideColumn(1)  # Size column
+    self.file_tree.hideColumn(2)  # Type column
+    self.file_tree.hideColumn(3)  # Date modified column
+    
+    # Connect double-click to open file
+    self.file_tree.doubleClicked.connect(self.tree_item_double_clicked)
+    
+    # Set the dock widget's content
+
+    def find_jule_executable(self):
+        """Find the Jule executable in default installation path"""
+        self.jule_exe = None
+        
+        # Default Jule installation path from installer
+        default_jule_path = os.path.join(os.path.expanduser("~"), "jule", "bin", "jule.exe")
+        if os.path.isfile(default_jule_path):
+            self.jule_exe = default_jule_path
+            return
+        
+        # If not in default location, check PATH
+        if "PATH" in os.environ:
+            for path_dir in os.environ["PATH"].split(os.pathsep):
+                jule_path = os.path.join(path_dir, "jule.exe")
+                if os.path.isfile(jule_path):
+                    self.jule_exe = jule_path
+                    return
+        
+        # If still not found, show error
+        QMessageBox.warning(
+            self,
+            "Jule Not Found",
+            "Could not find Jule executable. Please make sure Jule is installed correctly."
+        )
+
+    def new_file(self):
+        # Create new editor
+        editor = QTextEdit()
+        editor.setFont(QFont("Consolas", 10))
+        
+        # Apply syntax highlighting
+        highlighter = JuleSyntaxHighlighter(editor.document())
+        
+        # Add to tab widget
+        self.tab_widget.addTab(editor, "Untitled")
+        self.tab_widget.setCurrentWidget(editor)
+        
+        # Set focus to the editor
+        editor.setFocus()
+
+    def open_file(self):
+        file_path, _ = QFileDialog.getOpenFileName(self, "Open File", "", "Jule Files (*.jule);;All Files (*)")
+        if file_path:
+            self.open_specific_file(file_path)
+
+    def open_specific_file(self, file_path):
+        try:
+            # Check if file is already open
+            for i in range(self.tab_widget.count()):
+                if hasattr(self.tab_widget.widget(i), "file_path") and self.tab_widget.widget(i).file_path == file_path:
+                    self.tab_widget.setCurrentIndex(i)
+                    return
+            
+            with open(file_path, 'r') as file:
+                content = file.read()
+            
+            # Create new editor
+            editor = QTextEdit()
+            editor.setFont(QFont("Consolas", 10))
+            editor.setText(content)
+            
+            # Apply syntax highlighting
+            highlighter = JuleSyntaxHighlighter(editor.document())
+            
+            # Store file path with the editor
+            editor.file_path = file_path
+            
+            # Add to tab widget
+            file_name = os.path.basename(file_path)
+            self.tab_widget.addTab(editor, file_name)
+            self.tab_widget.setCurrentWidget(editor)
+            
+            # Set focus to the editor
+            editor.setFocus()
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Could not open file: {str(e)}")
+
+    def save_file(self):
+        editor = self.tab_widget.currentWidget()
+        if not editor:
+            return
+        
+        # Check if file has a path
+        if hasattr(editor, "file_path"):
+            file_path = editor.file_path
+        else:
+            # If not, prompt for save location
+            return self.save_file_as()
+        
+        try:
+            with open(file_path, 'w') as file:
+                file.write(editor.toPlainText())
+            
+            # Update tab name if needed
+            current_index = self.tab_widget.currentIndex()
+            current_name = self.tab_widget.tabText(current_index)
+            file_name = os.path.basename(file_path)
+            if current_name != file_name:
+                self.tab_widget.setTabText(current_index, file_name)
+            
+            return True
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Could not save file: {str(e)}")
+            return False
+    
+    def save_file_as(self):
+        editor = self.tab_widget.currentWidget()
+        if not editor:
+            return False
+        
+        file_path, _ = QFileDialog.getSaveFileName(self, "Save File", "", "Jule Files (*.jule);;All Files (*)")
+        if not file_path:
+            return False
+        
+        # Add .jule extension if not present and no other extension specified
+        if '.' not in os.path.basename(file_path):
+            file_path += ".jule"
+        
+        try:
+            with open(file_path, 'w') as file:
+                file.write(editor.toPlainText())
+            
+            # Store file path with the editor
+            editor.file_path = file_path
+            
+            # Update tab name
+            current_index = self.tab_widget.currentIndex()
+            file_name = os.path.basename(file_path)
+            self.tab_widget.setTabText(current_index, file_name)
+            
+            return True
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Could not save file: {str(e)}")
+            return False
+    
+    def close_tab(self, index):
+        # Check if there are unsaved changes
+        editor = self.tab_widget.widget(index)
+        if editor and hasattr(editor, "file_path"):
+            try:
+                with open(editor.file_path, 'r') as file:
+                    saved_content = file.read()
+                
+                current_content = editor.toPlainText()
+                if current_content != saved_content:
+                    reply = QMessageBox.question(
+                        self, "Unsaved Changes",
+                        f"The file {self.tab_widget.tabText(index)} has unsaved changes. Save before closing?",
+                        QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel
+                    )
+                    
+                    if reply == QMessageBox.Save:
+                        self.tab_widget.setCurrentIndex(index)
+                        if not self.save_file():
+                            return  # Don't close if save failed
+                    elif reply == QMessageBox.Cancel:
+                        return  # Don't close if canceled
+            except Exception:
+                # If we can't read the file, just ask if they want to save
+                reply = QMessageBox.question(
+                    self, "Unsaved Changes",
+                    f"The file {self.tab_widget.tabText(index)} may have unsaved changes. Save before closing?",
+                    QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel
+                )
+                
+                if reply == QMessageBox.Save:
+                    self.tab_widget.setCurrentIndex(index)
+                    if not self.save_file():
+                        return  # Don't close if save failed
+                elif reply == QMessageBox.Cancel:
+                    return  # Don't close if canceled
+        
+        # Close the tab
+        self.tab_widget.removeTab(index)
+        
+        # Create a new tab if all tabs are closed
+        if self.tab_widget.count() == 0:
+            self.new_file()
+    
+    def cut(self):
+        editor = self.tab_widget.currentWidget()
+        if editor:
+            editor.cut()
+    
+    def copy(self):
+        editor = self.tab_widget.currentWidget()
+        if editor:
+            editor.copy()
+    
+    def paste(self):
+        editor = self.tab_widget.currentWidget()
+        if editor:
+            editor.paste()
+    
+    def run_script(self):
+        editor = self.tab_widget.currentWidget()
+        if not editor:
+            return
+        
+        if not self.jule_exe:
+            QMessageBox.warning(self, "Error", "Jule executable not found.")
+            return
+        
+        # Save the file first if it has a path
+        if hasattr(editor, "file_path"):
+            self.save_file()
+            script_path = editor.file_path
+        else:
+            # Save to temporary file
+            temp_file = os.path.join(os.path.expanduser("~"), "temp_jule_script.jule")
+            try:
+                with open(temp_file, 'w') as file:
+                    file.write(editor.toPlainText())
+                script_path = temp_file
+            except Exception as e:
+                QMessageBox.warning(self, "Error", f"Could not save temporary file: {str(e)}")
+                return
+        
+        # Clear output console
+        self.output_console.clear()
+        self.output_console.append(f"Running: {script_path}\n")
+        
+        try:
+            # Run the script
+            process = subprocess.Popen(
+                [self.jule_exe, script_path],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            stdout, stderr = process.communicate()
+            
+            if stdout:
+                self.output_console.append(stdout)
+            if stderr:
+                self.output_console.append(f"Error: {stderr}")
+            
+            self.output_console.append("\nExecution completed.")
+            
+            # Clean up temporary file if needed
+            if not hasattr(editor, "file_path") and os.path.exists(temp_file):
+                os.remove(temp_file)
+        except Exception as e:
+            self.output_console.append(f"Error running script: {str(e)}")
+
+if __name__ == "__main__":
+    main()

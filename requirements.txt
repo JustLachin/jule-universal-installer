@@ -1,0 +1,4 @@
+PyQt5==5.15.9
+requests==2.31.0
+pywin32==306
+winshell==0.6
